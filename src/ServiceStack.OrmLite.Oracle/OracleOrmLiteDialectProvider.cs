@@ -124,7 +124,6 @@ namespace ServiceStack.OrmLite.Oracle
             return null;
         }
 
-        private OracleTimestampConverter _timestampConverter;
         private readonly object _timestampLock = new object();
 
         public override IDbConnection CreateConnection(string connectionString, Dictionary<string, string> options)
@@ -135,11 +134,6 @@ namespace ServiceStack.OrmLite.Oracle
             }
 
             var factory = DbProviderFactories.GetFactory(ClientProvider);
-            lock (_timestampLock)
-            {
-                if (_timestampConverter == null)
-                    _timestampConverter = new OracleTimestampConverter(factory);
-            }
             IDbConnection connection = factory.CreateConnection();
             if (connection != null) connection.ConnectionString = connectionString;
             return connection;
@@ -161,16 +155,9 @@ namespace ServiceStack.OrmLite.Oracle
             if (HandledDbNullValue(fieldDef, reader, colIndex, instance)) return;
 
             object convertedValue;
-            if (fieldDef.FieldType == typeof(DateTimeOffset))
-            {
-                _timestampConverter.SetOracleTimestampTzFormat();
-                convertedValue = _timestampConverter.ConvertTimestampTzToDateTimeOffset(reader, colIndex);
-            }
-            else
-            {
-                var value = reader.GetValue(colIndex);
-                convertedValue = ConvertDbValue(value, fieldDef.FieldType);
-            }
+            var value = reader.GetValue(colIndex);
+            convertedValue = ConvertDbValue(value, fieldDef.FieldType);
+        
             try
             {
                 fieldDef.SetValueFn(instance, convertedValue);
@@ -406,10 +393,6 @@ namespace ServiceStack.OrmLite.Oracle
         {
             var value = GetValueOrDbNull<T>(fieldDef, obj);
 
-            if (fieldDef.ColumnType == typeof(DateTimeOffset) || fieldDef.ColumnType == typeof(DateTimeOffset?))
-            {
-                _timestampConverter.SetOracleParameterTypeTimestampTz(p);
-            }
             p.Value = value;
         }
 
@@ -424,12 +407,6 @@ namespace ServiceStack.OrmLite.Oracle
                     var guid = (Guid)value;
                     if (CompactGuid) return guid.ToByteArray();
                     return guid.ToString();
-                }
-                if (fieldDef.FieldType == typeof(DateTimeOffset))
-                {
-                    _timestampConverter.SetOracleTimestampTzFormat();
-                    var timestamp = (DateTimeOffset)value;
-                    return _timestampConverter.ConvertDateTimeOffsetToString(timestamp);
                 }
             }
             return value;
