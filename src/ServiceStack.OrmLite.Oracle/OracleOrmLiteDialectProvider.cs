@@ -12,8 +12,7 @@ namespace ServiceStack.OrmLite.Oracle
 {
     public class OracleOrmLiteDialectProvider : OrmLiteDialectProviderBase<OracleOrmLiteDialectProvider>
     {
-        public const string OdpProvider = "Oracle.DataAccess.Client";
-        public const string MicrosoftProvider = "System.Data.OracleClient";
+        public const string OdpProvider = "Oracle.ManagedDataAccess.Client";
 
         protected readonly List<string> ReservedNames = new List<string>
         {

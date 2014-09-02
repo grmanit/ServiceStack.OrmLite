@@ -23,7 +23,7 @@ namespace ServiceStack.OrmLite.Oracle
         public OracleTimestampConverter(DbProviderFactory factory)
         {
             OracleAssembly = factory.GetType().Assembly;
-            var globalizationType = OracleAssembly.GetType("Oracle.DataAccess.Client.OracleGlobalization");
+            var globalizationType = OracleAssembly.GetType("Oracle.ManagedDataAccess.Client.OracleGlobalization");
             if (globalizationType != null)
             {
                 DateTimeOffsetInputFormat = DateTimeOffsetOutputFormat = "yyyy-MM-dd HH:mm:ss.ffffff zzz";
@@ -34,14 +34,14 @@ namespace ServiceStack.OrmLite.Oracle
                 globalizationType.InvokeMember("TimeStampTZFormat", setProperty, null, SetThreadInfoArgs[0], new object[] { TimestampTzFormat });
                 SetThreadInfo = globalizationType.GetMethod("SetThreadInfo", BindingFlags.Public | BindingFlags.Static);
 
-                var parameterType = OracleAssembly.GetType("Oracle.DataAccess.Client.OracleParameter");
+                var parameterType = OracleAssembly.GetType("Oracle.ManagedDataAccess.Client.OracleParameter");
                 var oracleDbTypeProperty = parameterType.GetProperty("OracleDbType", BindingFlags.Public | BindingFlags.Instance);
                 SetOracleDbType = oracleDbTypeProperty.GetSetMethod();
 
-                var oracleDbType = OracleAssembly.GetType("Oracle.DataAccess.Client.OracleDbType");
+                var oracleDbType = OracleAssembly.GetType("Oracle.ManagedDataAccess.Client.OracleDbType");
                 SetOracleDbTypeArgs = new [] {Enum.Parse(oracleDbType, "TimeStampTZ")};
 
-                var readerType = OracleAssembly.GetType("Oracle.DataAccess.Client.OracleDataReader");
+                var readerType = OracleAssembly.GetType("Oracle.ManagedDataAccess.Client.OracleDataReader");
                 GetOracleValue = readerType.GetMethod("GetOracleValue", BindingFlags.Public | BindingFlags.Instance);
             }
             else
