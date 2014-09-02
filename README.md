@@ -1,3 +1,5 @@
+> This is an exact clone of ServiceStack.OrmLite from 2nd of September 2014 with only one difference: ServiceStack.OrmLite.Oracle uses by default and only the **Managed** oracle driver (*Oracle.ManagedDataAccess*)
+
 [Join the ServiceStack Google+ group](https://plus.google.com/u/0/communities/112445368900682590445) or
 follow [@servicestack](http://twitter.com/servicestack) for updates.
 
