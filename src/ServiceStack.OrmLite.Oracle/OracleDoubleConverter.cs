@@ -13,7 +13,7 @@ namespace ServiceStack.OrmLite.Oracle
         public OracleDoubleConverter(DbProviderFactory factory)
         {
             OracleAssembly = factory.GetType().Assembly;
-            var readerType = OracleAssembly.GetType("Oracle.DataAccess.Client.OracleDataReader");
+            var readerType = OracleAssembly.GetType("Oracle.ManagedDataAccess.Client.OracleDataReader");
             GetOracleValue = readerType.GetMethod("GetOracleValue", BindingFlags.Public | BindingFlags.Instance);
         }
 
