@@ -5,8 +5,9 @@ using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using ServiceStack.Text;
-using ServiceStack;
+using System.Threading;
+using System.Threading.Tasks;
+using ServiceStack.Data;
 
 namespace ServiceStack.OrmLite.SqlServer
 {
@@ -412,7 +413,7 @@ namespace ServiceStack.OrmLite.SqlServer
 
             var ret = string.Format(
                 "{0} FROM (SELECT ROW_NUMBER() OVER ({2}) As RowNum, {1} {3}) AS RowConstrainedResult WHERE RowNum > {4} AND RowNum <= {5}",
-                StripTablePrefixes(selectExpression), //SELECT without RowNum to be able to use in SELECT IN () Reference Queries
+                UseAliasesOrStripTablePrefixes(selectExpression), 
                 selectExpression.Substring(selectType.Length),
                 orderByExpression,
                 bodyExpression,
@@ -422,28 +423,150 @@ namespace ServiceStack.OrmLite.SqlServer
             return ret;
         }
 
-        string StripTablePrefixes(string selectExpression)
+        //SELECT without RowNum and prefer aliases to be able to use in SELECT IN () Reference Queries
+        public static string UseAliasesOrStripTablePrefixes(string selectExpression)
         {
             if (selectExpression.IndexOf('.') < 0)
                 return selectExpression;
 
             var sb = new StringBuilder();
-            var tokens = selectExpression.Split(' ');
+            var selectToken = selectExpression.SplitOnFirst(' ');
+            var tokens = selectToken[1].Split(',');
             foreach (var token in tokens)
             {
-                var parts = token.SplitOnLast('.');
+                if (sb.Length > 0)
+                    sb.Append(", ");
+
+                var field = token.Trim();
+
+                var aliasParts = field.SplitOnLast(' ');
+                if (aliasParts.Length > 1)
+                {
+                    sb.Append(" " + aliasParts[aliasParts.Length - 1]);
+                    continue;
+                }
+
+                var parts = field.SplitOnLast('.');
                 if (parts.Length > 1)
                 {
                     sb.Append(" " + parts[parts.Length - 1]);
                 }
                 else
                 {
-                    sb.Append(" " + token);
+                    sb.Append(" " + field);
                 }
             }
 
-            return sb.ToString();
+            var sqlSelect = selectToken[0] + " " + sb.ToString().Trim();
+            return sqlSelect;
         }
+
+        public override string GetLoadChildrenSubSelect<From>(ModelDefinition modelDef, SqlExpression<From> expr)
+        {
+            if (!expr.OrderByExpression.IsNullOrEmpty() && expr.Rows == null)
+            {
+                expr.Select(this.GetQuotedColumnName(modelDef, modelDef.PrimaryKey))
+                    .ClearLimits()
+                    .OrderBy(""); //Invalid in Sub Selects
+
+                var subSql = expr.ToSelectStatement();
+
+                return subSql;
+            }
+            
+            return base.GetLoadChildrenSubSelect(modelDef, expr);
+        }
+
+        protected SqlConnection Unwrap(IDbConnection db)
+        {
+            return (SqlConnection)db.ToDbConnection();
+        }
+
+        protected SqlCommand Unwrap(IDbCommand cmd)
+        {
+            return (SqlCommand) cmd.ToDbCommand();
+        }
+
+        protected SqlDataReader Unwrap(IDataReader reader)
+        {
+            return (SqlDataReader)reader;
+        }
+
+#if NET45
+        public override Task OpenAsync(IDbConnection db, CancellationToken token)
+        {
+            return Unwrap(db).OpenAsync(token);
+        }
+
+        public override Task<IDataReader> ExecuteReaderAsync(IDbCommand cmd, CancellationToken token)
+        {
+            return Unwrap(cmd).ExecuteReaderAsync(token).Then(x => (IDataReader)x);
+        }
+
+        public override Task<int> ExecuteNonQueryAsync(IDbCommand cmd, CancellationToken token)
+        {
+            return Unwrap(cmd).ExecuteNonQueryAsync(token);
+        }
+
+        public override Task<object> ExecuteScalarAsync(IDbCommand cmd, CancellationToken token)
+        {
+            return Unwrap(cmd).ExecuteScalarAsync(token);
+        }
+
+        public override Task<bool> ReadAsync(IDataReader reader, CancellationToken token)
+        {
+            return Unwrap(reader).ReadAsync(token);
+        }
+
+        public override async Task<List<T>> ReaderEach<T>(IDataReader reader, Func<T> fn, CancellationToken token)
+        {
+            try
+            {
+                var to = new List<T>();
+                while (await ReadAsync(reader, token).ConfigureAwait(false))
+                {
+                    var row = fn();
+                    to.Add(row);
+                }
+                return to;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public override async Task<Return> ReaderEach<Return>(IDataReader reader, Action fn, Return source, CancellationToken token)
+        {
+            try
+            {
+                while (await ReadAsync(reader, token).ConfigureAwait(false))
+                {
+                    fn();
+                }
+                return source;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public override async Task<T> ReaderRead<T>(IDataReader reader, Func<T> fn, CancellationToken token)
+        {
+            try
+            {
+                if (await ReadAsync(reader, token).ConfigureAwait(false))
+                    return fn();
+
+                return default(T);
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+#endif
 
     }
 }

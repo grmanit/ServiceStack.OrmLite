@@ -4,6 +4,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ServiceStack.OrmLite
 {
@@ -56,6 +58,28 @@ namespace ServiceStack.OrmLite
         {
             return Exec(dbCmd => dbCmd.Save((T)obj));
         }
+
+#if NET45
+        public Task<int> SaveAllAsync(IEnumerable objs, CancellationToken token)
+        {
+            return Exec(dbCmd => dbCmd.SaveAllAsync((IEnumerable<T>)objs, token));
+        }
+
+        public Task<bool> SaveAsync(object obj, CancellationToken token)
+        {
+            return Exec(dbCmd => dbCmd.SaveAsync((T)obj, token));
+        }
+#else
+        public Task<int> SaveAllAsync(IEnumerable objs, CancellationToken token)
+        {
+            throw new NotImplementedException(OrmLiteUtilExtensions.AsyncRequiresNet45Error);
+        }
+
+        public Task<bool> SaveAsync(object obj, CancellationToken token)
+        {
+            throw new NotImplementedException(OrmLiteUtilExtensions.AsyncRequiresNet45Error);
+        }
+#endif
 
         public void InsertAll(IEnumerable objs)
         {

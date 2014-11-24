@@ -24,7 +24,8 @@ namespace ServiceStack.OrmLite
         IList<string> insertFields = new List<string>();
 
         private string sep = string.Empty;
-        private bool useFieldName = false;
+        protected bool useFieldName = false;
+        protected bool selectDistinct = false;
         private ModelDefinition modelDef;
         public bool PrefixFieldWithTableName { get; set; }
         public bool WhereStatementWithoutWhereString { get; set; }
@@ -54,6 +55,7 @@ namespace ServiceStack.OrmLite
             to.underlyingExpression = underlyingExpression;
             to.orderByProperties = orderByProperties;
             to.selectExpression = selectExpression;
+            to.selectDistinct = selectDistinct;
             to.fromExpression = fromExpression;
             to.whereExpression = whereExpression;
             to.groupBy = groupBy;
@@ -361,7 +363,17 @@ namespace ServiceStack.OrmLite
             return OrderByFields(" DESC", fieldNames);
         }
 
-        public virtual SqlExpression<T> OrderBy<TKey>(Expression<Func<T, TKey>> keySelector)
+        public virtual SqlExpression<T> OrderBy(Expression<Func<T, object>> keySelector)
+        {
+            return OrderByInternal(keySelector);
+        }
+
+        public virtual SqlExpression<T> OrderBy<Table>(Expression<Func<Table, object>> keySelector)
+        {
+            return OrderByInternal(keySelector);
+        }
+
+        private SqlExpression<T> OrderByInternal(Expression keySelector)
         {
             sep = string.Empty;
             useFieldName = true;
@@ -380,7 +392,17 @@ namespace ServiceStack.OrmLite
             return this;
         }
 
-        public virtual SqlExpression<T> ThenBy<TKey>(Expression<Func<T, TKey>> keySelector)
+        public virtual SqlExpression<T> ThenBy(Expression<Func<T, object>> keySelector)
+        {
+            return ThenByInternal(keySelector);
+        }
+
+        public virtual SqlExpression<T> ThenBy<Table>(Expression<Func<Table, object>> keySelector)
+        {
+            return ThenByInternal(keySelector);
+        }
+
+        private SqlExpression<T> ThenByInternal(Expression keySelector)
         {
             sep = string.Empty;
             useFieldName = true;
@@ -390,7 +412,17 @@ namespace ServiceStack.OrmLite
             return this;
         }
 
-        public virtual SqlExpression<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> keySelector)
+        public virtual SqlExpression<T> OrderByDescending(Expression<Func<T, object>> keySelector)
+        {
+            return OrderByDescendingInternal(keySelector);
+        }
+
+        public virtual SqlExpression<T> OrderByDescending<Table>(Expression<Func<Table, object>> keySelector)
+        {
+            return OrderByDescendingInternal(keySelector);
+        }
+
+        private SqlExpression<T> OrderByDescendingInternal(Expression keySelector)
         {
             sep = string.Empty;
             useFieldName = true;
@@ -409,7 +441,17 @@ namespace ServiceStack.OrmLite
             return this;
         }
 
-        public virtual SqlExpression<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> keySelector)
+        public virtual SqlExpression<T> ThenByDescending(Expression<Func<T, object>> keySelector)
+        {
+            return ThenByDescendingInternal(keySelector);
+        }
+
+        public virtual SqlExpression<T> ThenByDescending<Table>(Expression<Func<Table, object>> keySelector)
+        {
+            return ThenByDescendingInternal(keySelector);
+        }
+
+        private SqlExpression<T> ThenByDescendingInternal(Expression keySelector)
         {
             sep = string.Empty;
             useFieldName = true;
@@ -619,7 +661,10 @@ namespace ServiceStack.OrmLite
 
             foreach (var fieldDef in modelDef.FieldDefinitions)
             {
+                if (fieldDef.ShouldSkipUpdate()) continue;
+                if (fieldDef.IsRowVersion) continue;
                 if (updateFields.Count > 0 && !updateFields.Contains(fieldDef.Name)) continue; // added
+
                 var value = fieldDef.GetValue(item);
                 if (excludeDefaults && (value == null || value.Equals(value.GetType().GetDefaultValue()))) continue; //GetDefaultValue?
 
@@ -1052,11 +1097,11 @@ namespace ServiceStack.OrmLite
         {
             if (m.Object != null && m.Object as MethodCallExpression != null)
                 return IsColumnAccess(m.Object as MethodCallExpression);
-
+            
             var exp = m.Object as MemberExpression;
             return exp != null
                 && exp.Expression != null
-                && exp.Expression.Type == typeof(T)
+                && IsJoinedTable(exp.Expression.Type)
                 && exp.Expression.NodeType == ExpressionType.Parameter;
         }
 
@@ -1185,12 +1230,11 @@ namespace ServiceStack.OrmLite
 
         protected bool IsFieldName(object quotedExp)
         {
-            FieldDefinition fd =
-                modelDef.FieldDefinitions.
-                    FirstOrDefault(x =>
-                        DialectProvider.
-                        GetQuotedColumnName(x.FieldName) == quotedExp.ToString());
-            return (fd != default(FieldDefinition));
+            var fieldExpr = quotedExp.ToString().StripTablePrefixes();
+            var fieldNames = modelDef.FieldDefinitions.Map(x =>
+                DialectProvider.GetQuotedColumnName(x.FieldName));
+
+            return fieldNames.Any(x => x == fieldExpr);
         }
 
         protected object GetTrueExpression()
@@ -1215,8 +1259,10 @@ namespace ServiceStack.OrmLite
 
         private void BuildSelectExpression(string fields, bool distinct)
         {
+            selectDistinct = distinct;
+
             selectExpression = string.Format("SELECT {0}{1}",
-                (distinct ? "DISTINCT " : ""),
+                (selectDistinct ? "DISTINCT " : ""),
                 (string.IsNullOrEmpty(fields) ?
                     DialectProvider.GetColumnNames(modelDef) :
                     fields));

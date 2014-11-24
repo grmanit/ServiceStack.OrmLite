@@ -36,15 +36,24 @@ namespace ServiceStack.OrmLite.Oracle
             get { return _instance ?? (_instance = new OracleOrmLiteDialectProvider()); }
         }
 
-        internal long LastInsertId { get; set; }
         protected bool CompactGuid;
 
         internal const string StringGuidDefinition = "VARCHAR2(37)";
         internal const string CompactGuidDefinition = "RAW(16)";
 
+        private OracleDoubleConverter _doubleConverter;
+        private DbProviderFactory _factory;
+
         public OracleOrmLiteDialectProvider()
             : this(false, false)
         {
+            CreateDoubleConverter();
+        }
+
+        private void CreateDoubleConverter()
+        {
+            _factory = DbProviderFactories.GetFactory(ClientProvider);
+            _doubleConverter = new OracleDoubleConverter(_factory);
         }
 
         public OracleOrmLiteDialectProvider(bool compactGuid, bool quoteNames, string clientProvider = OdpProvider)
@@ -71,6 +80,8 @@ namespace ServiceStack.OrmLite.Oracle
 
             NamingStrategy = new OracleNamingStrategy(MaxNameLength);
             ExecFilter = new OracleExecFilter();
+
+            CreateDoubleConverter();
         }
 
         public override void OnAfterInitColumnTypeMap()
@@ -114,7 +125,7 @@ namespace ServiceStack.OrmLite.Oracle
                 var triggerName = NamingStrategy.ApplyNameRestrictions(
                     RowVersionTriggerFormat.Fmt(modelDef.ModelName));
                 var triggerBody = ":NEW.{0} := :OLD.{0}+1;".Fmt(
-                    modelDef.RowVersion.FieldName.SqlColumn());
+                    modelDef.RowVersion.FieldName.SqlColumn(this));
 
                 var sql = "CREATE TRIGGER {0} BEFORE UPDATE ON {1} FOR EACH ROW BEGIN {2} END;".Fmt(
                     Quote(triggerName), modelDef.ModelName, triggerBody);
@@ -125,8 +136,8 @@ namespace ServiceStack.OrmLite.Oracle
             return null;
         }
 
-        private OracleTimestampConverter _timestampConverter;
         private readonly object _timestampLock = new object();
+        private OracleTimestampConverter _timestampConverter;
 
         public override IDbConnection CreateConnection(string connectionString, Dictionary<string, string> options)
         {
@@ -135,26 +146,36 @@ namespace ServiceStack.OrmLite.Oracle
                 connectionString = options.Aggregate(connectionString, (current, option) => current + (option.Key + "=" + option.Value + ";"));
             }
 
-            var factory = DbProviderFactories.GetFactory(ClientProvider);
             lock (_timestampLock)
             {
                 if (_timestampConverter == null)
-                    _timestampConverter = new OracleTimestampConverter(factory);
+                    _timestampConverter = new OracleTimestampConverter(_factory);
             }
-            IDbConnection connection = factory.CreateConnection();
+            IDbConnection connection = _factory.CreateConnection();
             if (connection != null) connection.ConnectionString = connectionString;
             return connection;
         }
 
         public override long GetLastInsertId(IDbCommand dbCmd)
         {
-            return LastInsertId;
+            throw new NotSupportedException();
         }
 
         public override long InsertAndGetLastInsertId<T>(IDbCommand dbCmd)
         {
             dbCmd.ExecuteScalar();
-            return GetLastInsertId(dbCmd);
+
+            var modelDef = GetModel(typeof(T));
+
+            var primaryKey = modelDef.PrimaryKey;
+            if (primaryKey == null)
+                return 0;
+
+            var identityParameter = (DbParameter)dbCmd.Parameters[this.GetParam(SanitizeFieldNameForParamName(primaryKey.FieldName))];
+            if (identityParameter == null)
+                return 0;
+
+            return Convert.ToInt64(identityParameter.Value);
         }
 
         public override void SetDbValue(FieldDefinition fieldDef, IDataReader reader, int colIndex, object instance)
@@ -166,6 +187,10 @@ namespace ServiceStack.OrmLite.Oracle
             {
                 _timestampConverter.SetOracleTimestampTzFormat();
                 convertedValue = _timestampConverter.ConvertTimestampTzToDateTimeOffset(reader, colIndex);
+            }
+            else if (fieldDef.FieldType == typeof(double))
+            {
+                convertedValue = _doubleConverter.ConvertToDouble(reader, colIndex);
             }
             else
             {
@@ -267,7 +292,7 @@ namespace ServiceStack.OrmLite.Oracle
 
             if (fieldType.IsEnum)
             {
-                var enumValue = OrmLiteConfig.DialectProvider.StringSerializer.SerializeToString(value);
+                var enumValue = StringSerializer.SerializeToString(value);
                 // Oracle stores empty strings in varchar columns as null so match that behavior here
                 if (enumValue == null)
                     return null;
@@ -501,7 +526,6 @@ namespace ServiceStack.OrmLite.Oracle
             return sql;
         }
 
-
         public override string ToUpdateRowStatement(object objWithProperties, ICollection<string> updateFields = null)
         {
             var sqlFilter = new StringBuilder();
@@ -537,7 +561,6 @@ namespace ServiceStack.OrmLite.Oracle
 
             return updateSql;
         }
-
 
         public override string ToDeleteRowStatement(object objWithProperties)
         {
@@ -897,13 +920,11 @@ namespace ServiceStack.OrmLite.Oracle
                 Object retObj;
                 if (long.TryParse(value.ToString(), out nv))
                 {
-                    LastInsertId = nv;
-                    retObj = LastInsertId;
+                    retObj = nv;
                 }
                 else
                 {
-                    LastInsertId = 0;
-                    retObj = value;
+                    retObj = 0;
                 }
                 return retObj;
             }
@@ -913,7 +934,6 @@ namespace ServiceStack.OrmLite.Oracle
                 dbCmd.Transaction = transaction;
                 dbCmd.CommandText = string.Format("SELECT {0}.NEXTVAL FROM dual", Quote(sequence));
                 var result = dbCmd.LongScalar();
-                LastInsertId = result;
                 return result;
             }
         }
@@ -1078,7 +1098,7 @@ namespace ServiceStack.OrmLite.Oracle
                 else
                 {
                     orderByExpression = string.Format("ORDER BY {0}",
-                        OrmLiteConfig.DialectProvider.GetQuotedColumnName(primaryKey.FieldName));
+                        this.GetQuotedColumnName(modelDef, primaryKey.FieldName));
                 }
             }
             sbInner.Append(" " + orderByExpression);

@@ -15,10 +15,11 @@ using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using ServiceStack.DataAnnotations;
 using ServiceStack.Logging;
 using ServiceStack.Text;
-using System.Diagnostics;
 using System.Linq.Expressions;
 
 namespace ServiceStack.OrmLite
@@ -755,11 +756,11 @@ namespace ServiceStack.OrmLite
                     {
                         return value;
                     }
-                    return OrmLiteConfig.DialectProvider.StringSerializer.SerializeToString(value);
+                    return StringSerializer.SerializeToString(value);
                 }
                 if (fieldDef.FieldType.IsEnum)
                 {
-                    var enumValue = OrmLiteConfig.DialectProvider.StringSerializer.SerializeToString(value);
+                    var enumValue = StringSerializer.SerializeToString(value);
                     if (enumValue == null)
                         return null;
 
@@ -795,7 +796,7 @@ namespace ServiceStack.OrmLite
             if (value == null)
                 return DBNull.Value;
 
-            var unquotedVal = OrmLiteConfig.DialectProvider.GetQuotedValue(value, fieldDef.FieldType)
+            var unquotedVal = GetQuotedValue(value, fieldDef.FieldType)
                 .TrimStart('\'').TrimEnd('\''); ;
 
             if (string.IsNullOrEmpty(unquotedVal))
@@ -1334,7 +1335,7 @@ namespace ServiceStack.OrmLite
 
             try
             {
-                var convertedValue = OrmLiteConfig.DialectProvider.StringSerializer.DeserializeFromString(value.ToString(), type);
+                var convertedValue = StringSerializer.DeserializeFromString(value.ToString(), type);
                 return convertedValue;
             }
             catch (Exception)
@@ -1348,10 +1349,9 @@ namespace ServiceStack.OrmLite
         {
             if (value == null) return "NULL";
 
-            var dialectProvider = OrmLiteConfig.DialectProvider;
             if (fieldType.IsRefType())
             {
-                return dialectProvider.GetQuotedValue(dialectProvider.StringSerializer.SerializeToString(value));
+                return GetQuotedValue(StringSerializer.SerializeToString(value));
             }
 
             if (fieldType.IsEnum)
@@ -1363,10 +1363,10 @@ namespace ServiceStack.OrmLite
                     value = Enum.ToObject(fieldType, enumValue).ToString();
                 }
 
-                var enumString = dialectProvider.StringSerializer.SerializeToString(value);
+                var enumString = StringSerializer.SerializeToString(value);
 
                 return !isEnumFlags
-                    ? dialectProvider.GetQuotedValue(enumString.Trim('"'))
+                    ? GetQuotedValue(enumString.Trim('"'))
                     : enumString;
             }
 
@@ -1389,7 +1389,12 @@ namespace ServiceStack.OrmLite
                 case TypeCode.UInt32:
                 case TypeCode.UInt64:
                     if (fieldType.IsNumericType())
-                        return Convert.ChangeType(value, fieldType).ToString();
+                    {
+                        if (value is TimeSpan)
+                            return ((TimeSpan)value).Ticks.ToString(CultureInfo.InvariantCulture);
+
+                        return Convert.ChangeType(value, fieldType).ToString();                        
+                    }
                     break;
             }
 
@@ -1397,7 +1402,7 @@ namespace ServiceStack.OrmLite
                 return ((TimeSpan)value).Ticks.ToString(CultureInfo.InvariantCulture);
  
             return ShouldQuoteValue(fieldType)
-                    ? dialectProvider.GetQuotedValue(value.ToString())
+                    ? GetQuotedValue(value.ToString())
                     : value.ToString();
         }
 
@@ -1412,5 +1417,126 @@ namespace ServiceStack.OrmLite
                 .Replace("_", @"^_")
                 .Replace("%", @"^%");
         }
+
+        public virtual string GetLoadChildrenSubSelect<From>(ModelDefinition modelDef, SqlExpression<From> expr)
+        {
+            expr.Select(this.GetQuotedColumnName(modelDef, modelDef.PrimaryKey));
+
+            var subSql = expr.ToSelectStatement();
+
+            return subSql;
+        }
+
+        //Async API's, should be overrided by Dialect Providers to use .ConfigureAwait(false)
+        //Default impl below uses TaskAwaiter shim in async.cs
+
+        public virtual Task OpenAsync(IDbConnection db, CancellationToken token = default(CancellationToken))
+        {
+            db.Open();
+            return TaskResult.Finished;
+        }
+
+        public virtual Task<IDataReader> ExecuteReaderAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken))
+        {
+            return cmd.ExecuteReader().InTask();
+        }
+
+        public virtual Task<int> ExecuteNonQueryAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken))
+        {
+            return cmd.ExecuteNonQuery().InTask();
+        }
+
+        public virtual Task<object> ExecuteScalarAsync(IDbCommand cmd, CancellationToken token = default(CancellationToken))
+        {
+            return cmd.ExecuteScalar().InTask();
+        }
+
+        public virtual Task<bool> ReadAsync(IDataReader reader, CancellationToken token = default(CancellationToken))
+        {
+            return reader.Read().InTask();
+        }
+
+#if NET45
+        public virtual async Task<List<T>> ReaderEach<T>(IDataReader reader, Func<T> fn, CancellationToken token = default(CancellationToken))
+        {
+            try
+            {
+                var to = new List<T>();
+                while (await ReadAsync(reader, token))
+                {
+                    var row = fn();
+                    to.Add(row);
+                }
+                return to;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public virtual async Task<Return> ReaderEach<Return>(IDataReader reader, Action fn, Return source, CancellationToken token = default(CancellationToken))
+        {
+            try
+            {
+                while (await ReadAsync(reader, token))
+                {
+                    fn();
+                }
+                return source;
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
+        public virtual async Task<T> ReaderRead<T>(IDataReader reader, Func<T> fn, CancellationToken token = default(CancellationToken))
+        {
+            try
+            {
+                if (await ReadAsync(reader, token))
+                    return fn();
+
+                return default(T);
+            }
+            finally 
+            {
+                reader.Dispose();
+            }
+        }
+
+        public virtual Task<long> InsertAndGetLastInsertIdAsync<T>(IDbCommand dbCmd, CancellationToken token)
+        {
+            if (SelectIdentitySql == null)
+                return new NotImplementedException("Returning last inserted identity is not implemented on this DB Provider.")
+                    .InTask<long>();
+
+            dbCmd.CommandText += "; " + SelectIdentitySql;
+
+            return dbCmd.ExecLongScalarAsync(null, token);
+        }
+#else
+        public Task<List<T>> ReaderEach<T>(IDataReader reader, Func<T> fn, CancellationToken token = new CancellationToken())
+        {
+            throw new NotImplementedException(OrmLiteUtilExtensions.AsyncRequiresNet45Error);
+        }
+
+        public Task<Return> ReaderEach<Return>(IDataReader reader, Action fn, Return source, CancellationToken token = new CancellationToken())
+        {
+            throw new NotImplementedException(OrmLiteUtilExtensions.AsyncRequiresNet45Error);
+        }
+
+        public Task<T> ReaderRead<T>(IDataReader reader, Func<T> fn, CancellationToken token = new CancellationToken())
+        {
+            throw new NotImplementedException(OrmLiteUtilExtensions.AsyncRequiresNet45Error);
+        }
+
+        public Task<long> InsertAndGetLastInsertIdAsync<T>(IDbCommand dbCmd, CancellationToken token)
+        {
+            throw new NotImplementedException(OrmLiteUtilExtensions.AsyncRequiresNet45Error);
+        }
+#endif
+
     }
 }

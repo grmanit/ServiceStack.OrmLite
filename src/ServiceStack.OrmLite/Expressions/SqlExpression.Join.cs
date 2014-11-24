@@ -10,6 +10,11 @@ namespace ServiceStack.OrmLite
     {
         List<ModelDefinition> tableDefs = new List<ModelDefinition>();
 
+        bool IsJoinedTable(Type type)
+        {
+            return tableDefs.FirstOrDefault(x => x.ModelType == type) != null;
+        }
+
         public SqlExpression<T> Join<Target>(Expression<Func<T, Target, bool>> joinExpr = null)
         {
             return InternalJoin("INNER JOIN", joinExpr);
@@ -60,7 +65,17 @@ namespace ServiceStack.OrmLite
             return InternalJoin("FULL JOIN", joinExpr);
         }
 
-        private SqlExpression<T> InternalJoin<Source, Target>(string joinType,
+        public SqlExpression<T> CrossJoin<Target>(Expression<Func<T, Target, bool>> joinExpr = null)
+        {
+            return InternalJoin("CROSS JOIN", joinExpr);
+        }
+
+        public SqlExpression<T> CrossJoin<Source, Target>(Expression<Func<Source, Target, bool>> joinExpr = null)
+        {
+            return InternalJoin("CROSS JOIN", joinExpr);
+        }
+
+        private SqlExpression<T> InternalJoin<Source, Target>(string joinType, 
             Expression<Func<Source, Target, bool>> joinExpr)
         {
             var sourceDef = typeof(Source).GetModelDefinition();
@@ -69,59 +84,57 @@ namespace ServiceStack.OrmLite
             return InternalJoin(joinType, joinExpr, sourceDef, targetDef);
         }
 
+        private string InternalCreateSqlFromExpression(Expression joinExpr) 
+        {
+            return "ON {0}".Fmt(Visit(joinExpr).ToString());
+        }
+
+        private string InternalCreateSqlFromDefinitions(ModelDefinition sourceDef, ModelDefinition targetDef, bool allowMissingOnClause) 
+        {
+            var parentDef = sourceDef;
+            var childDef = targetDef;
+
+            var refField = parentDef.GetRefFieldDefIfExists(childDef);
+            if (refField == null) 
+            {
+                parentDef = targetDef;
+                childDef = sourceDef;
+                refField = parentDef.GetRefFieldDefIfExists(childDef);
+            }
+
+            if (refField == null) 
+            {
+                if(!allowMissingOnClause)
+                    throw new ArgumentException("Could not infer relationship between {0} and {1}".Fmt(sourceDef.ModelName, targetDef.ModelName));
+
+                return string.Empty;
+            }
+
+            return "ON\n({0}.{1} = {2}.{3})".Fmt(
+                DialectProvider.GetQuotedTableName(parentDef),
+                SqlColumn(parentDef.PrimaryKey.FieldName),
+                DialectProvider.GetQuotedTableName(childDef),
+                SqlColumn(refField.FieldName));
+        }
+
         private SqlExpression<T> InternalJoin(string joinType, 
             Expression joinExpr, ModelDefinition sourceDef, ModelDefinition targetDef)
         {
             PrefixFieldWithTableName = true;
 
-            var fromExpr = FromExpression;
-            var sbJoin = new StringBuilder();
-
-            string sqlExpr;
-
             //Changes how Sql Expressions are generated.
             useFieldName = true;
             sep = " ";
 
-            if (joinExpr != null)
-            {
-                sqlExpr = Visit(joinExpr).ToString();
-            }
-            else
-            {
-                var parentDef = sourceDef;
-                var childDef = targetDef;
-
-                var refField = OrmLiteReadExtensions.GetRefFieldDefIfExists(parentDef, childDef);
-                if (refField == null)
-                {
-                    parentDef = targetDef;
-                    childDef = sourceDef;
-                    refField = OrmLiteReadExtensions.GetRefFieldDefIfExists(parentDef, childDef);
-                }
-
-                if (refField == null)
-                {
-                    throw new ArgumentException("Could not infer relationship between {0} and {1}"
-                                                    .Fmt(sourceDef.ModelName, targetDef.ModelName));
-                }
-
-                sqlExpr = "\n({0}.{1} = {2}.{3})".Fmt(
-                    DialectProvider.GetQuotedTableName(parentDef),
-                    SqlColumn(parentDef.PrimaryKey.FieldName),
-                    DialectProvider.GetQuotedTableName(childDef),
-                    SqlColumn(refField.FieldName));
-            }
+            var sqlExpr = joinExpr != null 
+                ? InternalCreateSqlFromExpression(joinExpr) 
+                : InternalCreateSqlFromDefinitions(sourceDef, targetDef, "CROSS JOIN".Equals(joinType));
 
             var joinDef = tableDefs.Contains(targetDef) && !tableDefs.Contains(sourceDef)
                               ? sourceDef
                               : targetDef;
 
-            sbJoin.Append(" {0} {1} ".Fmt(joinType, SqlTable(joinDef)));
-            sbJoin.Append(" ON ");
-            sbJoin.Append(sqlExpr);
-
-            FromExpression = fromExpr + sbJoin;
+            FromExpression += " {0} {1} {2}".Fmt(joinType, SqlTable(joinDef), sqlExpr);
 
             if (!tableDefs.Contains(sourceDef))
                 tableDefs.Add(sourceDef);
@@ -166,6 +179,10 @@ namespace ServiceStack.OrmLite
                             sbSelect.AppendFormat("{0}.{1}",
                                 SqlTable(tableDef),
                                 tableFieldDef.GetQuotedName(DialectProvider));
+
+                            if (tableFieldDef.Alias != null)
+                                sbSelect.Append(" AS ").Append(DialectProvider.NamingStrategy.GetColumnName(fieldDef.Name));
+
                             break;
                         }
                     }
@@ -200,7 +217,7 @@ namespace ServiceStack.OrmLite
             }
 
             var columns = sbSelect.Length > 0 ? sbSelect.ToString() : "*";
-            SelectExpression = "SELECT " + columns;
+            SelectExpression = "SELECT " + (selectDistinct ? "DISTINCT " : "") + columns;
 
             return ToSelectStatement();
         }
