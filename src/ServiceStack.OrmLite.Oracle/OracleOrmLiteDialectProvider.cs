@@ -12,8 +12,7 @@ namespace ServiceStack.OrmLite.Oracle
 {
     public class OracleOrmLiteDialectProvider : OrmLiteDialectProviderBase<OracleOrmLiteDialectProvider>
     {
-        public const string OdpProvider = "Oracle.DataAccess.Client";
-        public const string MicrosoftProvider = "System.Data.OracleClient";
+        public const string OdpProvider = "Oracle.ManagedDataAccess.Client";
 
         protected readonly List<string> ReservedNames = new List<string>
         {
@@ -137,7 +136,6 @@ namespace ServiceStack.OrmLite.Oracle
         }
 
         private readonly object _timestampLock = new object();
-        private OracleTimestampConverter _timestampConverter;
 
         public override IDbConnection CreateConnection(string connectionString, Dictionary<string, string> options)
         {
@@ -146,11 +144,6 @@ namespace ServiceStack.OrmLite.Oracle
                 connectionString = options.Aggregate(connectionString, (current, option) => current + (option.Key + "=" + option.Value + ";"));
             }
 
-            lock (_timestampLock)
-            {
-                if (_timestampConverter == null)
-                    _timestampConverter = new OracleTimestampConverter(_factory);
-            }
             IDbConnection connection = _factory.CreateConnection();
             if (connection != null) connection.ConnectionString = connectionString;
             return connection;
@@ -183,12 +176,7 @@ namespace ServiceStack.OrmLite.Oracle
             if (HandledDbNullValue(fieldDef, reader, colIndex, instance)) return;
 
             object convertedValue;
-            if (fieldDef.FieldType == typeof(DateTimeOffset))
-            {
-                _timestampConverter.SetOracleTimestampTzFormat();
-                convertedValue = _timestampConverter.ConvertTimestampTzToDateTimeOffset(reader, colIndex);
-            }
-            else if (fieldDef.FieldType == typeof(double))
+            if (fieldDef.FieldType == typeof(double))
             {
                 convertedValue = _doubleConverter.ConvertToDouble(reader, colIndex);
             }
@@ -432,10 +420,6 @@ namespace ServiceStack.OrmLite.Oracle
         {
             var value = GetValueOrDbNull<T>(fieldDef, obj);
 
-            if (fieldDef.ColumnType == typeof(DateTimeOffset) || fieldDef.ColumnType == typeof(DateTimeOffset?))
-            {
-                _timestampConverter.SetOracleParameterTypeTimestampTz(p);
-            }
             p.Value = value;
         }
 
@@ -450,12 +434,6 @@ namespace ServiceStack.OrmLite.Oracle
                     var guid = (Guid)value;
                     if (CompactGuid) return guid.ToByteArray();
                     return guid.ToString();
-                }
-                if (fieldDef.FieldType == typeof(DateTimeOffset))
-                {
-                    _timestampConverter.SetOracleTimestampTzFormat();
-                    var timestamp = (DateTimeOffset)value;
-                    return _timestampConverter.ConvertDateTimeOffsetToString(timestamp);
                 }
             }
             return value;
